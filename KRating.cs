@@ -7,7 +7,7 @@ using Dapper;
 namespace KRating;
 
 
-[MinimumApiVersion(87)]
+[MinimumApiVersion(101)]
 public partial class KRating : BasePlugin, IPluginConfig<KRatingConfig>
 {
     public override void Load(bool hotReload)
