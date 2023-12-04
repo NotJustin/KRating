@@ -33,15 +33,12 @@ public partial class KRating : BasePlugin, IPluginConfig<KRatingConfig>
             {
                 return HookResult.Continue;
             }
-            Console.WriteLine("finding index");
             int index = players.FindIndex(kPlayer => kPlayer.steamid64 == player.SteamID);
             if (index != -1)
             {
-                Console.WriteLine("index is NOT -1");
                 players[index].Store();
                 players.RemoveAt(index);
             }
-            Console.WriteLine("continue");
             return HookResult.Continue;
         });
 
@@ -134,39 +131,29 @@ public partial class KRating : BasePlugin, IPluginConfig<KRatingConfig>
             // If this is null we would've thrown an exception previously.
             if (kRating.connection == null)
             {
-                Console.WriteLine("null connection");
                 return;
             }
 
             // If the table does not exist, we cannot store anything.
             if (!tableExists)
             {
-                Console.WriteLine("exception");
                 throw new Exception("[KRating] Attempted to store points before verifying KRating table exists!");
             }
 
             // If new player still has default points, there is no information worth storing.
             if (newPlayer && points == kRating.Config.Points.StartingPoints)
             {
-                Console.WriteLine("new player");
                 return;
             }
 
             Task.Run(async () =>
             {
-                try
-                {
-                    await kRating.connection.ExecuteAsync(@"
-                        INSERT INTO `KRating` (`steamid64`, `points`)
-                        VALUES (@steamid64, @points)
-                        ON DUPLICATE KEY
-                        UPDATE `points` = @points;"
-                , new { steamid64, points });
-                }
-                catch(Exception e)
-                {
-                    Console.WriteLine(e.ToString());
-                }
+                await kRating.connection.ExecuteAsync(@"
+                    INSERT INTO `KRating` (`steamid64`, `points`)
+                    VALUES (@steamid64, @points)
+                    ON DUPLICATE KEY
+                    UPDATE `points` = @points;"
+            , new { steamid64, points });
             });
         }
 
