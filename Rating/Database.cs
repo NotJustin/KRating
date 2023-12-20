@@ -1,4 +1,5 @@
 ﻿using Dapper;
+using Microsoft.Extensions.Logging;
 using MySqlConnector;
 
 namespace KRating;
@@ -9,25 +10,29 @@ public partial class Rating
     {
         public const string buildKRatingTable = @"
             CREATE TABLE IF NOT EXISTS `KRating`(
+                `username` VARCHAR(32) NULL,
                 `steamid64` BIGINT UNSIGNED NOT NULL PRIMARY KEY,
                 `points` INT NOT NULL)
             ENGINE=InnoDB
             DEFAULT CHARSET=utf8mb3
             COLLATE=utf8mb3_unicode_ci";
-
         public const string loadAllPlayers = @"
             SELECT steamid64 as Steamid64,
                    points as Points
             FROM `KRating`
             WHERE `steamid64` in @steamid64s";
-
-        public const string storeAllPlayers =@"
-            INSERT INTO `KRating` (`steamid64`, `points`)
-            VALUES(@steamid64, @points)
+        public const string storeAllPlayers = @"
+            INSERT INTO `KRating` (`username`, `steamid64`, `points`)
+            VALUES(@Username, @Steamid64, @Points)
             ON DUPLICATE KEY
-            UPDATE `points` = VALUES(`points`)";
+            UPDATE `username` = VALUES(`username), `points` = VALUES(`points`)";
+        public const string getTopTen = @"
+                SELECT username, points
+                FROM `KRating`
+                ORDER BY points DESC
+                LIMIT 10";
     }
-    private void BuildDatabaseConnectionString()
+    private string BuildDatabaseConnectionString()
     {
         var builder = new MySqlConnectionStringBuilder
         {
@@ -39,66 +44,83 @@ public partial class Rating
             ConvertZeroDateTime = true,
             SslMode = MySqlSslMode.None
         };
-
         DatabaseConnectionString = builder.ConnectionString;
+        return DatabaseConnectionString;
     }
-    public async Task BeginDatabaseConnection(List<ulong> steamid64s)
+    public async Task BeginDatabaseConnection(bool hotReload, List<Player> onlinePlayers)
     {
-        connection = new(DatabaseConnectionString);
-        connection.Open();
+        using MySqlConnection connection = new(DatabaseConnectionString);
+        await connection.OpenAsync();
         if (connection.State != System.Data.ConnectionState.Open)
         {
-            throw new Exception("[KRating] Unable connect to database!");
+            Logger.LogError("[KRating] Unable connect to database!");
         }
-        await BuildKRatingTable(steamid64s);
+        await BuildKRatingTable(hotReload, onlinePlayers);
     }
-
-    public async Task BuildKRatingTable(List<ulong> steamid64s)
+    public async Task BuildKRatingTable(bool hotReload, List<Player> onlinePlayers)
     {
-        MySqlTransaction transaction = await connection.BeginTransactionAsync();
-
-        await connection.ExecuteAsync(Queries.buildKRatingTable, transaction: transaction);
-        await transaction.CommitAsync();
-
-        tableExists = true;
-        await LoadAllPlayers(steamid64s);
-    }
-
-    public async Task LoadAllPlayers(List<ulong> steamid64s)
-    {
-        IEnumerable<Player> results = await connection.QueryAsync<Player>(Queries.loadAllPlayers, new { steamid64s = steamid64s.ToArray() });
-        // Grab all players from the database.
-        foreach (Player result in results)
+        try
         {
-            players.Add(new Player(connection, result.Steamid64, result.Points, false, false));
-        }
-        // Mark each of these players as an existing player.
-        foreach (Player player in players)
-        {
-            player.Connection = connection;
-            player.NewPlayer = false;
-        }
-        // Grab remaining online players that were not in the database.
-        foreach (ulong steamid64 in steamid64s)
-        {
-            bool exists = false;
-            foreach (Player player in players)
+            using MySqlConnection connection = new(DatabaseConnectionString);
+            await connection.OpenAsync();
+            MySqlTransaction transaction = await connection.BeginTransactionAsync();
+            await connection.ExecuteAsync(Queries.buildKRatingTable, transaction: transaction);
+            await transaction.CommitAsync();
+            tableExists = true;
+            if (hotReload && onlinePlayers.Count > 0)
             {
-                if (player.Steamid64 == steamid64)
-                {
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists)
-            {
-                players.Add(new Player(connection, steamid64, Config.Points.StartingPoints, true, true));
+                await LoadAllPlayersAsync(onlinePlayers);
             }
         }
+        catch (Exception ex)
+        {
+            Logger.LogError("{Message}", ex.ToString());
+        }
     }
-
-    public async Task StoreAllPlayers()
+    public async Task LoadAllPlayersAsync(List<Player> onlinePlayers)
     {
-        await connection.ExecuteAsync(Queries.storeAllPlayers, players);
+        try
+        {
+            using MySqlConnection connection = new(DatabaseConnectionString);
+            await connection.OpenAsync();
+            IEnumerable<Player> results = await connection.QueryAsync<Player>(Queries.loadAllPlayers, new { steamid64s = onlinePlayers.Select(player => player.Steamid64).ToArray() });
+            // Add all players from the database to the player list.
+            foreach (Player result in results)
+            {
+                // Asserting that the player exists in the list of onlinePlayers because we just filtered onlinePlayers to grab these steamids in the first place.
+                players.Add(new Player(onlinePlayers.Find(onlinePlayer => onlinePlayer.Steamid64 == result.Steamid64)!.Username, result.Steamid64, result.Points, false, false));
+            }
+            // Add all remaining online players that were not in the database to the player list.
+            foreach (Player player in onlinePlayers.FindAll(onlinePlayer => !players.Exists(player => onlinePlayer.Steamid64 == player.Steamid64)))
+            {
+                players.Add(new Player(player.Username, player.Steamid64, Config.Points.StartingPoints, true, true));
+            }
+        }
+        catch(Exception ex)
+        {
+            Logger.LogError("{Message}", ex.ToString());
+        }
+    }
+    public async Task StoreAllPlayersAsync()
+    {
+        try
+        {
+            using MySqlConnection connection = new(DatabaseConnectionString);
+            await connection.OpenAsync();
+            MySqlTransaction transaction = await connection.BeginTransactionAsync();
+            await connection.ExecuteAsync(Queries.storeAllPlayers, players, transaction: transaction);
+            await transaction.CommitAsync();
+        }
+        catch(Exception ex)
+        {
+            Logger.LogError("{Message}", ex.ToString());
+        }
+    }
+    public async Task<List<string>> GetTopTenAsync()
+    {
+        using MySqlConnection connection = new(DatabaseConnectionString);
+        await connection.OpenAsync();
+        IEnumerable<Player> results = await connection.QueryAsync<Player>(Queries.getTopTen);
+        return GetFormattedMessageForTopTenCommand(results);
     }
 }

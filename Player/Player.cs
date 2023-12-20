@@ -1,19 +1,21 @@
-﻿using MySqlConnector;
-
-namespace KRating
+﻿namespace KRating
 {
     public partial class Player
     {
-        public Player(MySqlConnection connection, ulong steamid64, int points, bool newPlayer, bool doLoad)
+        public Player()
         {
-            Connection = connection;
+
+        }
+        public Player(string username, ulong steamid64, int points, bool newPlayer, bool doLoad)
+        {
+            Username = username;
             Steamid64 = steamid64;
             Points = points;
             PointsOnLoad = points;
             NewPlayer = newPlayer;
             if (doLoad)
             {
-                Task.Run(Load);
+                Task.Run(LoadAsync);
             }
         }
         // Only used by line:
